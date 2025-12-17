@@ -14,33 +14,33 @@ import {
   Info,
   Pin,
   Database,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 
 export default function FeriaApp() {
   // --- CONFIGURACIÓN INICIAL ---
-  // Fecha de hoy por defecto
   const today = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(today);
   const [selectedStall, setSelectedStall] = useState(null);
   const [occupyCount, setOccupyCount] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+  const [stalls, setStalls] = useState([]);
 
-  // --- GENERADOR DE ESTRUCTURA BASE (Sin datos, solo arquitectura) ---
+  // --- GENERADOR DE ESTRUCTURA BASE ---
   const generateStructure = () => {
-    let stalls = [];
+    let newStalls = [];
     let idCounter = 1;
 
     const addStalls = (count, category, colorKey, rowName) => {
       for (let i = 0; i < count; i++) {
-        stalls.push({
+        newStalls.push({
           id: idCounter++,
           indexByCategory: i,
           number: `${category.charAt(0).toUpperCase()}-${i + 1}`,
           categoryName: category,
           colorKey: colorKey,
           rowName: rowName,
-          // Estado inicial por defecto
           status: 'free',
           vendorName: '',
           description: '',
@@ -59,106 +59,98 @@ export default function FeriaApp() {
     addStalls(9,  'Rojo', 'red', 'Fila 2.5 - Sector Premium');
     addStalls(6,  'Rosa', 'pink', 'Fila 3 - Sector Exclusivo');
 
-    return stalls;
+    return newStalls;
   };
 
-  const [stalls, setStalls] = useState([]);
-  // Referencia para saber si es la primera carga y no sobrescribir lógica
-  const isFirstLoad = useRef(true);
+  // --- LÓGICA DE PERSISTENCIA Y CALENDARIO ---
 
-  // --- SISTEMA DE PERSISTENCIA Y CALENDARIO (CORE LOGIC) ---
-
-  // 1. Cargar datos al iniciar o cambiar fecha
+  // 1. EFECTO DE CARGA: Se dispara al cambiar fecha
   useEffect(() => {
+    // PASO CRÍTICO: Vaciamos el estado inmediatamente.
+    // Esto evita que el efecto de guardado (que corre abajo) guarde los datos viejos en la nueva fecha.
+    setStalls([]); 
     setIsLoading(true);
     
-    // Simular pequeño delay de red para realismo
-    setTimeout(() => {
+    // Pequeño timeout para asegurar que el estado se limpie antes de procesar
+    const timer = setTimeout(() => {
       loadDataForDate(selectedDate);
       setIsLoading(false);
-    }, 300);
+    }, 150);
 
+    return () => clearTimeout(timer);
   }, [selectedDate]);
 
-  // Función para guardar datos de la fecha actual ANTES de cambiar
-  const saveDataForDate = (date, dataToSave) => {
-    const key = `feria_data_${date}`;
-    localStorage.setItem(key, JSON.stringify(dataToSave));
-  };
-
-  // Función inteligente de carga
+  // Función de carga inteligente
   const loadDataForDate = (date) => {
     const key = `feria_data_${date}`;
     const savedData = localStorage.getItem(key);
 
     if (savedData) {
-      // CASO A: Ya existen datos para esta fecha, los cargamos
-      console.log(`Cargando datos existentes para ${date}`);
+      // CASO A: Ya existen datos guardados para esta fecha
+      console.log(`Datos encontrados para ${date}`);
       setStalls(JSON.parse(savedData));
     } else {
-      // CASO B: No hay datos para esta fecha (es un día nuevo)
-      // ¿Qué hacemos? Buscamos el "último estado conocido" o generamos base
-      // LÓGICA DE NEGOCIO: Traer los FIJOS de la última sesión activa o generar vacíos
-      
-      console.log(`Generando nuevo día para ${date}`);
-      
-      // Intentamos recuperar la "Plantilla Maestra" (o el día de hoy si existe)
-      // Para simplificar, si no hay datos de ESTE día, generamos estructura limpia
-      // PERO, intentamos ver si hay datos en memoria del estado anterior para copiar los fijos
+      // CASO B: Es una fecha nueva / sin datos
+      console.log(`Generando nuevo día para ${date} con fijos heredados`);
       
       const cleanStalls = generateStructure();
       
-      // TRUCO PRO: Si venimos de otro día, podríamos haber guardado los "Fijos" en una 'master_list'
-      // Aquí implementaremos: Buscar si hay algun día guardado previamente para copiar fijos
-      const masterKey = 'feria_master_fixed'; 
-      const masterFixed = localStorage.getItem(masterKey);
+      // Recuperamos la lista maestra de fijos
+      const masterFixed = localStorage.getItem('feria_master_fixed');
 
       if (masterFixed) {
-        const fixedIds = JSON.parse(masterFixed); // Array de IDs y sus datos
+        const fixedIds = JSON.parse(masterFixed);
         
+        // Fusionamos la estructura limpia con los datos fijos
         const mergedStalls = cleanStalls.map(s => {
           const fixedData = fixedIds.find(f => f.id === s.id);
           if (fixedData) {
-            return { ...s, ...fixedData }; // Restaurar datos del fijo
+            // Restauramos al fijo, pero reseteamos asistencia y pago del nuevo día
+            return { 
+              ...s, 
+              ...fixedData, 
+              hasPaid: false, 
+              attended: false 
+            }; 
           }
-          return s; // Dejar limpio
+          return s; // Se mantiene libre
         });
         setStalls(mergedStalls);
-        // Guardamos inmediatamente para que este día ya exista
-        saveDataForDate(date, mergedStalls);
       } else {
         setStalls(cleanStalls);
       }
     }
   };
 
-  // 2. Guardar automáticamente cada vez que 'stalls' cambia
+  // 2. EFECTO DE GUARDADO: Se dispara cuando 'stalls' cambia
   useEffect(() => {
-    if (stalls.length > 0) {
-      saveDataForDate(selectedDate, stalls);
+    // BLOQUEO DE SEGURIDAD:
+    // Solo guardamos si hay datos Y si NO estamos en proceso de carga.
+    if (stalls.length > 0 && !isLoading) {
+      // Guardar estado del día actual
+      localStorage.setItem(`feria_data_${selectedDate}`, JSON.stringify(stalls));
       
-      // LÓGICA DE FIJOS: Actualizar la lista maestra de fijos
+      // Actualizar la "Lista Maestra de Fijos"
+      // Cada vez que editamos, revisamos quiénes son fijos ahora y actualizamos el backup global
       const fixedStalls = stalls
         .filter(s => s.isFixed)
         .map(s => ({
           id: s.id,
-          status: 'occupied', // Los fijos siempre nacen ocupados
+          status: 'occupied',
           vendorName: s.vendorName,
           description: s.description,
           isFixed: true,
           groupId: s.groupId,
           groupSize: s.groupSize,
-          // Nota: hasPaid y attended NO se guardan en el maestro, porque eso es por día
-          hasPaid: false, 
-          attended: false
+          notes: s.notes
         }));
       
       localStorage.setItem('feria_master_fixed', JSON.stringify(fixedStalls));
     }
-  }, [stalls, selectedDate]);
+  }, [stalls, selectedDate, isLoading]);
 
 
-  // --- MANEJADORES (HANDLERS) ---
+  // --- MANEJADORES ---
 
   const handleStallClick = (clickedStall) => {
     setOccupyCount(clickedStall.groupSize || 1);
@@ -173,6 +165,7 @@ export default function FeriaApp() {
         s.categoryName === currentStall.categoryName && 
         s.indexByCategory === currentStall.indexByCategory + i
       );
+      // Validar contra el array 'stalls' en tiempo real
       if (nextStall && nextStall.status === 'free') count++;
       else break; 
     }
@@ -186,9 +179,7 @@ export default function FeriaApp() {
     
     if (selectedStall.groupId) {
        updatedStalls = updatedStalls.map(s => {
-         if (s.groupId === selectedStall.groupId) {
-           return { ...s, ...selectedStall }; // Spread operator copia todo lo editado
-         }
+         if (s.groupId === selectedStall.groupId) return { ...s, ...selectedStall };
          return s;
        });
     } else {
@@ -197,9 +188,7 @@ export default function FeriaApp() {
 
       updatedStalls = updatedStalls.map(s => {
         if (s.categoryName === selectedStall.categoryName && targetIndices.includes(s.indexByCategory)) {
-           return {
-             ...s, ...selectedStall, groupId: newGroupId, groupSize: occupyCount
-           };
+           return { ...s, ...selectedStall, groupId: newGroupId, groupSize: occupyCount };
         }
         return s;
       });
@@ -226,9 +215,8 @@ export default function FeriaApp() {
     setSelectedStall(prev => ({ ...prev, [field]: value }));
   };
 
-  // Función de reset total para demos
   const handleHardReset = () => {
-    if(confirm("¿Estás seguro? Esto borrará TODOS los datos de TODAS las fechas.")) {
+    if(confirm("ATENCIÓN: Esto borrará TODOS los datos, todos los días y todos los fijos. ¿Continuar?")) {
       localStorage.clear();
       window.location.reload();
     }
@@ -241,9 +229,11 @@ export default function FeriaApp() {
   const attendanceCount = stalls.filter(s => s.attended).length;
   const attendanceRate = totalOccupied > 0 ? Math.round((attendanceCount / totalOccupied) * 100) : 0;
 
-  // Renderizadores (UI)
+  // Render Row
   const renderRowSection = (rowTitle, categoryFilter, gridCols) => {
     const rowStalls = stalls.filter(s => s.categoryName === categoryFilter);
+    if(rowStalls.length === 0) return null;
+    
     const colorKey = rowStalls[0]?.colorKey || 'gray';
     const titleColors = {
       green: 'bg-emerald-100 text-emerald-800 border-emerald-200',
@@ -274,12 +264,21 @@ export default function FeriaApp() {
     );
   };
 
-  if (stalls.length === 0) return <div className="min-h-screen flex items-center justify-center text-slate-400">Cargando sistema...</div>;
+  // --- RENDER PRINCIPAL ---
+
+  if (stalls.length === 0 && isLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400 gap-4">
+        <Loader2 className="h-10 w-10 animate-spin text-sky-600" />
+        <p className="text-sm font-medium animate-pulse">Cargando mapa para {selectedDate}...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-700 font-sans pb-20">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm transition-all">
-        <div className={`h-2 w-full transition-colors duration-500 ${isLoading ? 'bg-amber-400 animate-pulse' : 'bg-sky-600'}`}></div>
+        <div className={`h-1.5 w-full transition-colors duration-300 ${isLoading ? 'bg-amber-400' : 'bg-sky-600'}`}></div>
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <div className="bg-sky-100 p-2.5 rounded-xl text-sky-700 shadow-sm">
@@ -288,10 +287,10 @@ export default function FeriaApp() {
             <div>
               <h1 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
                 Feria Manager 
-                <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full border border-sky-200 uppercase tracking-widest">Final v1.0</span>
+                <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full border border-sky-200 uppercase tracking-widest">Final</span>
               </h1>
               <p className="text-xs text-slate-400 font-medium flex items-center gap-1">
-                <Database className="h-3 w-3" /> Sistema con Persistencia Local
+                <Database className="h-3 w-3" /> Base de Datos Local Activa
               </p>
             </div>
           </div>
@@ -308,9 +307,8 @@ export default function FeriaApp() {
                 className="bg-transparent border-none text-sm text-slate-700 font-semibold focus:ring-0 cursor-pointer"
               />
             </div>
-            {/* Botón de pánico para limpiar demo */}
-            <button onClick={handleHardReset} className="text-xs text-slate-300 hover:text-red-400 underline" title="Borrar base de datos local">
-              Reset DB
+            <button onClick={handleHardReset} className="text-[10px] text-slate-300 hover:text-red-400 hover:underline px-2" title="Resetear DB">
+              Reset
             </button>
           </div>
         </div>
@@ -328,13 +326,6 @@ export default function FeriaApp() {
           <div className="flex flex-col items-center justify-center mb-10 opacity-60">
              <div className="w-2/3 h-2 bg-slate-200 rounded-full mb-2"></div>
              <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Entrada Principal</span>
-          </div>
-
-          <div className="absolute top-6 left-6 hidden md:flex flex-col gap-2 text-xs bg-slate-50/90 p-3 rounded-lg backdrop-blur-sm border border-slate-100 z-10 shadow-sm">
-             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-slate-300"></div> Libre</div>
-             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-slate-600"></div> Ocupado (Hoy)</div>
-             <div className="flex items-center gap-2"><Pin className="w-3 h-3 text-amber-600 fill-amber-600" /> Puesto Fijo</div>
-             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500 text-white flex items-center justify-center text-[8px]">!</div> Deuda/Ausente</div>
           </div>
 
           {renderRowSection('Fila 1 - Sector Verdes (36)', 'Verde', 'grid-cols-6 sm:grid-cols-9 md:grid-cols-12')}
@@ -356,14 +347,7 @@ export default function FeriaApp() {
                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide border ${getCategoryColor(selectedStall.colorKey).badge}`}>
                       {selectedStall.categoryName}
                    </span>
-                   {selectedStall.groupSize > 1 ? (
-                     <div className="flex items-center gap-2 mt-1">
-                        <h2 className="text-3xl font-bold text-slate-800">Pack {selectedStall.groupSize}</h2>
-                        <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md flex items-center gap-1"><LinkIcon className="h-3 w-3" /> Conectados</span>
-                     </div>
-                   ) : (
-                     <h2 className="text-3xl font-bold text-slate-800 mt-1">{selectedStall.number}</h2>
-                   )}
+                   <h2 className="text-3xl font-bold text-slate-800 mt-1">{selectedStall.number}</h2>
                 </div>
                 <button onClick={() => setSelectedStall(null)} className="text-slate-400 hover:text-slate-600 transition hover:bg-slate-100 rounded-full p-1"><XCircle className="h-8 w-8" /></button>
               </div>
@@ -374,6 +358,7 @@ export default function FeriaApp() {
                   <button type="button" onClick={() => updateSelectedField('status', 'occupied')} className={`py-2 rounded-lg text-sm font-bold transition shadow-sm ${selectedStall.status === 'occupied' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-600'}`}>Ocupado</button>
                 </div>
 
+                {/* SELECTOR DE TAMAÑO - SOLO SI ESTÁ OCUPADO Y ES NUEVO O SIN GRUPO */}
                 {selectedStall.status === 'occupied' && !selectedStall.groupId && (
                   <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
                     <label className="text-xs font-bold text-blue-800 uppercase mb-2 block flex items-center gap-2"><Maximize className="h-4 w-4" /> Cantidad de Puestos</label>
@@ -395,8 +380,8 @@ export default function FeriaApp() {
                         <div className="flex items-center gap-3">
                             <div className={`p-2 rounded-full ${selectedStall.isFixed ? 'bg-amber-500 text-white' : 'bg-slate-200 text-slate-400'}`}><Pin className="h-4 w-4 fill-current" /></div>
                             <div>
-                                <p className={`text-sm font-bold ${selectedStall.isFixed ? 'text-amber-800' : 'text-slate-500'}`}>{selectedStall.isFixed ? 'Puesto Fijo / Vitalicio' : 'Puesto Eventual'}</p>
-                                <p className="text-[10px] text-slate-400">{selectedStall.isFixed ? 'Se copia automáticamente a nuevas fechas.' : 'Se libera al cambiar de día.'}</p>
+                                <p className={`text-sm font-bold ${selectedStall.isFixed ? 'text-amber-800' : 'text-slate-500'}`}>{selectedStall.isFixed ? 'Puesto Fijo' : 'Eventual'}</p>
+                                <p className="text-[10px] text-slate-400">{selectedStall.isFixed ? 'Se mantiene al cambiar fecha.' : 'Se borra al cambiar fecha.'}</p>
                             </div>
                         </div>
                         <div className={`w-10 h-5 rounded-full relative transition-colors ${selectedStall.isFixed ? 'bg-amber-500' : 'bg-slate-300'}`}><div className={`absolute top-1 w-3 h-3 bg-white rounded-full shadow-sm transition-transform ${selectedStall.isFixed ? 'left-6' : 'left-1'}`}></div></div>
@@ -406,9 +391,10 @@ export default function FeriaApp() {
                       <label className="text-xs font-bold text-slate-400 uppercase ml-1">Puestero</label>
                       <input type="text" required value={selectedStall.vendorName} onChange={(e) => updateSelectedField('vendorName', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-800 font-medium focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition" placeholder="Nombre completo..." />
                     </div>
+                    
                     <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-400 uppercase ml-1 flex items-center gap-1"><AlignLeft className="h-3 w-3" /> Descripción de Venta</label>
-                      <textarea rows="2" value={selectedStall.description} onChange={(e) => updateSelectedField('description', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition resize-none" placeholder="Ej: Artesanías en madera, dulces caseros..." />
+                      <label className="text-xs font-bold text-slate-400 uppercase ml-1 flex items-center gap-1"><AlignLeft className="h-3 w-3" /> Descripción</label>
+                      <textarea rows="2" value={selectedStall.description} onChange={(e) => updateSelectedField('description', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition resize-none" placeholder="Rubro o productos..." />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -441,6 +427,7 @@ export default function FeriaApp() {
   );
 }
 
+// UI COMPONENTS
 function StatCard({ title, value, subtext, icon: Icon, colorClass }) {
   return (
     <div className={`p-5 rounded-2xl border ${colorClass} bg-opacity-30 relative overflow-hidden`}>
