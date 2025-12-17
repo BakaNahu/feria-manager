@@ -14,8 +14,7 @@ import {
   Info,
   Pin,
   Database,
-  RefreshCw,
-  Loader2
+  RefreshCw
 } from 'lucide-react';
 
 export default function FeriaApp() {
@@ -24,14 +23,12 @@ export default function FeriaApp() {
   const [selectedDate, setSelectedDate] = useState(today);
   const [selectedStall, setSelectedStall] = useState(null);
   const [occupyCount, setOccupyCount] = useState(1);
-  const [isLoading, setIsLoading] = useState(false);
   const [stalls, setStalls] = useState([]);
   
-  // SOLUCIÓN AL BUG: Referencia para rastrear qué fecha tienen los datos en memoria actualmente.
-  // Evita guardar datos viejos en una fecha nueva durante la transición.
-  const loadedDateRef = useRef(today);
+  // Referencia de seguridad para sincronización
+  const loadedDateRef = useRef(null);
 
-  // --- GENERADOR DE ESTRUCTURA BASE ---
+  // --- GENERADOR DE ESTRUCTURA ---
   const generateStructure = () => {
     let newStalls = [];
     let idCounter = 1;
@@ -66,51 +63,37 @@ export default function FeriaApp() {
     return newStalls;
   };
 
-  // --- LÓGICA DE PERSISTENCIA Y CALENDARIO ---
+  // --- LÓGICA DE CALENDARIO (SINCRÓNICA) ---
 
-  // 1. EFECTO DE CARGA: Se dispara al cambiar fecha
+  // 1. CARGA INMEDIATA AL CAMBIAR FECHA
   useEffect(() => {
-    // Al cambiar de fecha, limpiamos inmediatamente para evitar 'fantasmas' visuales
-    setStalls([]); 
-    setIsLoading(true);
-    
-    const timer = setTimeout(() => {
-      loadDataForDate(selectedDate);
-      setIsLoading(false);
-    }, 150);
-
-    return () => clearTimeout(timer);
-  }, [selectedDate]);
-
-  // Función de carga inteligente
-  const loadDataForDate = (date) => {
-    const key = `feria_data_${date}`;
+    const key = `feria_data_${selectedDate}`;
     const savedData = localStorage.getItem(key);
-
+    
     let dataToSet = [];
 
     if (savedData) {
-      // CASO A: Ya existen datos guardados para esta fecha
-      console.log(`Datos encontrados para ${date}`);
+      // Si ya visitamos esta fecha, cargamos sus datos exactos
+      // (Esto incluye eventuales que guardamos explícitamente para este día)
       dataToSet = JSON.parse(savedData);
     } else {
-      // CASO B: Es una fecha nueva / sin datos
-      console.log(`Generando nuevo día para ${date} con fijos heredados`);
-      
+      // Si es una fecha NUEVA, generamos limpio + fijos
       const cleanStalls = generateStructure();
       const masterFixed = localStorage.getItem('feria_master_fixed');
 
       if (masterFixed) {
         const fixedIds = JSON.parse(masterFixed);
-        // Fusionamos fijos con estructura limpia
+        // Fusionamos solo los que son FIJOS
         dataToSet = cleanStalls.map(s => {
           const fixedData = fixedIds.find(f => f.id === s.id);
           if (fixedData) {
             return { 
               ...s, 
               ...fixedData, 
+              // Reseteamos estados diarios
               hasPaid: false, 
-              attended: false 
+              attended: false,
+              status: 'occupied' // Aseguramos que se vea ocupado
             }; 
           }
           return s;
@@ -120,25 +103,24 @@ export default function FeriaApp() {
       }
     }
 
-    // ACTUALIZAMOS LA REFERENCIA ANTES DE SETEAR EL ESTADO
-    // Esto autoriza al efecto de guardado a funcionar para esta nueva fecha
-    loadedDateRef.current = date;
+    // Actualizamos la referencia ANTES de pintar para autorizar el guardado
+    loadedDateRef.current = selectedDate;
     setStalls(dataToSet);
-  };
 
-  // 2. EFECTO DE GUARDADO: Se dispara cuando 'stalls' cambia
+  }, [selectedDate]);
+
+  // 2. GUARDADO AUTOMÁTICO
   useEffect(() => {
-    // BLOQUEO DE SEGURIDAD (FIX DEL BUG):
-    // 1. Solo guardar si hay datos.
-    // 2. Solo guardar si no estamos cargando.
-    // 3. CRÍTICO: Solo guardar si la fecha seleccionada en el calendario COINCIDE
-    //    con la fecha de los datos que tenemos cargados en memoria.
-    if (stalls.length > 0 && !isLoading && selectedDate === loadedDateRef.current) {
+    // Solo guardamos si:
+    // a) Hay datos cargados
+    // b) La fecha que estamos viendo coincide con la fecha de los datos en memoria (Seguridad Anti-Race Condition)
+    if (stalls.length > 0 && loadedDateRef.current === selectedDate) {
       
-      // Guardar estado del día actual
+      // Guardar el día actual
       localStorage.setItem(`feria_data_${selectedDate}`, JSON.stringify(stalls));
       
-      // Actualizar la "Lista Maestra de Fijos"
+      // Actualizar la lista maestra de fijos
+      // Filtramos estrictamente solo los que tienen isFixed: true
       const fixedStalls = stalls
         .filter(s => s.isFixed)
         .map(s => ({
@@ -154,7 +136,7 @@ export default function FeriaApp() {
       
       localStorage.setItem('feria_master_fixed', JSON.stringify(fixedStalls));
     }
-  }, [stalls, selectedDate, isLoading]);
+  }, [stalls, selectedDate]);
 
 
   // --- MANEJADORES ---
@@ -222,7 +204,7 @@ export default function FeriaApp() {
   };
 
   const handleHardReset = () => {
-    if(confirm("ATENCIÓN: Esto borrará TODOS los datos, todos los días y todos los fijos. ¿Continuar?")) {
+    if(confirm("¿BORRAR TODO? Esto eliminará todos los datos guardados y reiniciará la app.")) {
       localStorage.clear();
       window.location.reload();
     }
@@ -270,21 +252,12 @@ export default function FeriaApp() {
     );
   };
 
-  // --- RENDER PRINCIPAL ---
-
-  if (stalls.length === 0 && isLoading) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-400 gap-4">
-        <Loader2 className="h-10 w-10 animate-spin text-sky-600" />
-        <p className="text-sm font-medium animate-pulse">Cargando mapa para {selectedDate}...</p>
-      </div>
-    );
-  }
+  if (stalls.length === 0) return <div className="min-h-screen flex items-center justify-center text-slate-400">Iniciando sistema...</div>;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-700 font-sans pb-20">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm transition-all">
-        <div className={`h-1.5 w-full transition-colors duration-300 ${isLoading ? 'bg-amber-400' : 'bg-sky-600'}`}></div>
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm">
+        <div className="bg-sky-600 h-1.5 w-full"></div>
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <div className="bg-sky-100 p-2.5 rounded-xl text-sky-700 shadow-sm">
@@ -293,18 +266,17 @@ export default function FeriaApp() {
             <div>
               <h1 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
                 Feria Manager 
-                <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full border border-sky-200 uppercase tracking-widest">Final</span>
               </h1>
               <p className="text-xs text-slate-400 font-medium flex items-center gap-1">
-                <Database className="h-3 w-3" /> Base de Datos Local Activa
+                <Database className="h-3 w-3" /> Sistema Local
               </p>
             </div>
           </div>
           
           <div className="flex items-center gap-4">
-            <div className={`flex items-center bg-slate-100 rounded-lg p-1 border transition-colors ${isLoading ? 'border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
+            <div className="flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
               <div className="px-3 text-slate-400">
-                {isLoading ? <RefreshCw className="h-5 w-5 animate-spin text-amber-500" /> : <Calendar className="h-5 w-5" />}
+                <Calendar className="h-5 w-5" />
               </div>
               <input 
                 type="date" 
@@ -313,8 +285,12 @@ export default function FeriaApp() {
                 className="bg-transparent border-none text-sm text-slate-700 font-semibold focus:ring-0 cursor-pointer"
               />
             </div>
-            <button onClick={handleHardReset} className="text-[10px] text-slate-300 hover:text-red-400 hover:underline px-2" title="Resetear DB">
-              Reset
+            <button 
+              onClick={handleHardReset} 
+              className="bg-red-50 text-red-500 hover:bg-red-100 hover:text-red-700 text-xs px-3 py-2 rounded-lg font-bold border border-red-200 transition" 
+              title="Borrar todos los datos y reiniciar"
+            >
+              Reset DB
             </button>
           </div>
         </div>
@@ -322,10 +298,10 @@ export default function FeriaApp() {
 
       <main className="max-w-7xl mx-auto p-6 md:p-8">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <StatCard title="Ocupación Día" value={`${totalOccupied} / ${stalls.length}`} subtext="Puestos ocupados hoy" icon={MapPin} colorClass="bg-blue-50 text-blue-600 border-blue-100" />
-          <StatCard title="Puestos Fijos" value={`${totalFixed}`} subtext="Se repiten autom." icon={Pin} colorClass="bg-amber-50 text-amber-600 border-amber-100" />
-          <StatCard title="Caja Diaria" value={`$${totalRevenue.toLocaleString()}`} subtext={`${stalls.filter(s => s.hasPaid).length} pagados hoy`} icon={DollarSign} colorClass="bg-emerald-50 text-emerald-600 border-emerald-100" />
-          <StatCard title="Asistencia" value={`${attendanceRate}%`} subtext={`${attendanceCount} presentes`} icon={Users} colorClass="bg-violet-50 text-violet-600 border-violet-100" />
+          <StatCard title="Ocupación" value={`${totalOccupied} / ${stalls.length}`} subtext="Total ocupados" icon={MapPin} colorClass="bg-blue-50 text-blue-600 border-blue-100" />
+          <StatCard title="Fijos" value={`${totalFixed}`} subtext="Se repiten autom." icon={Pin} colorClass="bg-amber-50 text-amber-600 border-amber-100" />
+          <StatCard title="Caja Estimada" value={`$${totalRevenue.toLocaleString()}`} subtext="Según pagos marcados" icon={DollarSign} colorClass="bg-emerald-50 text-emerald-600 border-emerald-100" />
+          <StatCard title="Asistencia" value={`${attendanceRate}%`} subtext="Presentismo hoy" icon={Users} colorClass="bg-violet-50 text-violet-600 border-violet-100" />
         </div>
 
         <div className="bg-white rounded-3xl p-8 shadow-xl border border-slate-100 relative overflow-hidden">
@@ -364,7 +340,6 @@ export default function FeriaApp() {
                   <button type="button" onClick={() => updateSelectedField('status', 'occupied')} className={`py-2 rounded-lg text-sm font-bold transition shadow-sm ${selectedStall.status === 'occupied' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-600'}`}>Ocupado</button>
                 </div>
 
-                {/* SELECTOR DE TAMAÑO */}
                 {selectedStall.status === 'occupied' && !selectedStall.groupId && (
                   <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
                     <label className="text-xs font-bold text-blue-800 uppercase mb-2 block flex items-center gap-2"><Maximize className="h-4 w-4" /> Cantidad de Puestos</label>
