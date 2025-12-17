@@ -73,8 +73,6 @@ export default function FeriaApp() {
     let dataToSet = [];
 
     if (savedData) {
-      // Si ya visitamos esta fecha, cargamos sus datos exactos
-      // (Esto incluye eventuales que guardamos explícitamente para este día)
       dataToSet = JSON.parse(savedData);
     } else {
       // Si es una fecha NUEVA, generamos limpio + fijos
@@ -90,10 +88,13 @@ export default function FeriaApp() {
             return { 
               ...s, 
               ...fixedData, 
-              // Reseteamos estados diarios
+              // Reseteamos estados diarios, pero MANTENEMOS la estructura del grupo
               hasPaid: false, 
               attended: false,
-              status: 'occupied' // Aseguramos que se vea ocupado
+              status: 'occupied',
+              // Aseguramos que el ID sea el original de la estructura, no el del guardado por si acaso
+              id: s.id,
+              number: s.number 
             }; 
           }
           return s;
@@ -103,7 +104,6 @@ export default function FeriaApp() {
       }
     }
 
-    // Actualizamos la referencia ANTES de pintar para autorizar el guardado
     loadedDateRef.current = selectedDate;
     setStalls(dataToSet);
 
@@ -111,19 +111,16 @@ export default function FeriaApp() {
 
   // 2. GUARDADO AUTOMÁTICO
   useEffect(() => {
-    // Solo guardamos si:
-    // a) Hay datos cargados
-    // b) La fecha que estamos viendo coincide con la fecha de los datos en memoria (Seguridad Anti-Race Condition)
     if (stalls.length > 0 && loadedDateRef.current === selectedDate) {
       
       // Guardar el día actual
       localStorage.setItem(`feria_data_${selectedDate}`, JSON.stringify(stalls));
       
       // Actualizar la lista maestra de fijos
-      // Filtramos estrictamente solo los que tienen isFixed: true
       const fixedStalls = stalls
         .filter(s => s.isFixed)
         .map(s => ({
+          // Guardamos datos esenciales
           id: s.id,
           status: 'occupied',
           vendorName: s.vendorName,
@@ -163,20 +160,41 @@ export default function FeriaApp() {
   const handleSaveStall = (e) => {
     e.preventDefault();
     const newGroupId = selectedStall.groupId || (occupyCount > 1 ? `g-${Date.now()}` : null);
+    
+    // CORRECCIÓN CRÍTICA: Objeto con solo los datos a actualizar
+    // NO incluimos 'id', 'number', 'indexByCategory' para no sobrescribir la identidad de los vecinos
+    const updates = {
+      status: selectedStall.status,
+      vendorName: selectedStall.vendorName,
+      description: selectedStall.description,
+      hasPaid: selectedStall.hasPaid,
+      attended: selectedStall.attended,
+      isFixed: selectedStall.isFixed,
+      notes: selectedStall.notes,
+      groupId: selectedStall.groupId || newGroupId,
+      groupSize: selectedStall.groupId ? selectedStall.groupSize : occupyCount
+    };
+
     let updatedStalls = [...stalls];
     
     if (selectedStall.groupId) {
+       // Editar grupo existente
        updatedStalls = updatedStalls.map(s => {
-         if (s.groupId === selectedStall.groupId) return { ...s, ...selectedStall };
+         if (s.groupId === selectedStall.groupId) {
+             // Fusionamos manteniendo el ID y Número originales del puesto 's'
+             return { ...s, ...updates };
+         }
          return s;
        });
     } else {
+      // Crear nueva ocupación
       const targetIndices = [];
       for(let i=0; i < occupyCount; i++) targetIndices.push(selectedStall.indexByCategory + i);
 
       updatedStalls = updatedStalls.map(s => {
         if (s.categoryName === selectedStall.categoryName && targetIndices.includes(s.indexByCategory)) {
-           return { ...s, ...selectedStall, groupId: newGroupId, groupSize: occupyCount };
+           // Fusionamos manteniendo identidad
+           return { ...s, ...updates };
         }
         return s;
       });
