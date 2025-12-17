@@ -26,6 +26,10 @@ export default function FeriaApp() {
   const [occupyCount, setOccupyCount] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [stalls, setStalls] = useState([]);
+  
+  // SOLUCIÓN AL BUG: Referencia para rastrear qué fecha tienen los datos en memoria actualmente.
+  // Evita guardar datos viejos en una fecha nueva durante la transición.
+  const loadedDateRef = useRef(today);
 
   // --- GENERADOR DE ESTRUCTURA BASE ---
   const generateStructure = () => {
@@ -66,12 +70,10 @@ export default function FeriaApp() {
 
   // 1. EFECTO DE CARGA: Se dispara al cambiar fecha
   useEffect(() => {
-    // PASO CRÍTICO: Vaciamos el estado inmediatamente.
-    // Esto evita que el efecto de guardado (que corre abajo) guarde los datos viejos en la nueva fecha.
+    // Al cambiar de fecha, limpiamos inmediatamente para evitar 'fantasmas' visuales
     setStalls([]); 
     setIsLoading(true);
     
-    // Pequeño timeout para asegurar que el estado se limpie antes de procesar
     const timer = setTimeout(() => {
       loadDataForDate(selectedDate);
       setIsLoading(false);
@@ -85,27 +87,25 @@ export default function FeriaApp() {
     const key = `feria_data_${date}`;
     const savedData = localStorage.getItem(key);
 
+    let dataToSet = [];
+
     if (savedData) {
       // CASO A: Ya existen datos guardados para esta fecha
       console.log(`Datos encontrados para ${date}`);
-      setStalls(JSON.parse(savedData));
+      dataToSet = JSON.parse(savedData);
     } else {
       // CASO B: Es una fecha nueva / sin datos
       console.log(`Generando nuevo día para ${date} con fijos heredados`);
       
       const cleanStalls = generateStructure();
-      
-      // Recuperamos la lista maestra de fijos
       const masterFixed = localStorage.getItem('feria_master_fixed');
 
       if (masterFixed) {
         const fixedIds = JSON.parse(masterFixed);
-        
-        // Fusionamos la estructura limpia con los datos fijos
-        const mergedStalls = cleanStalls.map(s => {
+        // Fusionamos fijos con estructura limpia
+        dataToSet = cleanStalls.map(s => {
           const fixedData = fixedIds.find(f => f.id === s.id);
           if (fixedData) {
-            // Restauramos al fijo, pero reseteamos asistencia y pago del nuevo día
             return { 
               ...s, 
               ...fixedData, 
@@ -113,25 +113,32 @@ export default function FeriaApp() {
               attended: false 
             }; 
           }
-          return s; // Se mantiene libre
+          return s;
         });
-        setStalls(mergedStalls);
       } else {
-        setStalls(cleanStalls);
+        dataToSet = cleanStalls;
       }
     }
+
+    // ACTUALIZAMOS LA REFERENCIA ANTES DE SETEAR EL ESTADO
+    // Esto autoriza al efecto de guardado a funcionar para esta nueva fecha
+    loadedDateRef.current = date;
+    setStalls(dataToSet);
   };
 
   // 2. EFECTO DE GUARDADO: Se dispara cuando 'stalls' cambia
   useEffect(() => {
-    // BLOQUEO DE SEGURIDAD:
-    // Solo guardamos si hay datos Y si NO estamos en proceso de carga.
-    if (stalls.length > 0 && !isLoading) {
+    // BLOQUEO DE SEGURIDAD (FIX DEL BUG):
+    // 1. Solo guardar si hay datos.
+    // 2. Solo guardar si no estamos cargando.
+    // 3. CRÍTICO: Solo guardar si la fecha seleccionada en el calendario COINCIDE
+    //    con la fecha de los datos que tenemos cargados en memoria.
+    if (stalls.length > 0 && !isLoading && selectedDate === loadedDateRef.current) {
+      
       // Guardar estado del día actual
       localStorage.setItem(`feria_data_${selectedDate}`, JSON.stringify(stalls));
       
       // Actualizar la "Lista Maestra de Fijos"
-      // Cada vez que editamos, revisamos quiénes son fijos ahora y actualizamos el backup global
       const fixedStalls = stalls
         .filter(s => s.isFixed)
         .map(s => ({
@@ -165,7 +172,6 @@ export default function FeriaApp() {
         s.categoryName === currentStall.categoryName && 
         s.indexByCategory === currentStall.indexByCategory + i
       );
-      // Validar contra el array 'stalls' en tiempo real
       if (nextStall && nextStall.status === 'free') count++;
       else break; 
     }
@@ -358,7 +364,7 @@ export default function FeriaApp() {
                   <button type="button" onClick={() => updateSelectedField('status', 'occupied')} className={`py-2 rounded-lg text-sm font-bold transition shadow-sm ${selectedStall.status === 'occupied' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-600'}`}>Ocupado</button>
                 </div>
 
-                {/* SELECTOR DE TAMAÑO - SOLO SI ESTÁ OCUPADO Y ES NUEVO O SIN GRUPO */}
+                {/* SELECTOR DE TAMAÑO */}
                 {selectedStall.status === 'occupied' && !selectedStall.groupId && (
                   <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 animate-in slide-in-from-top-2">
                     <label className="text-xs font-bold text-blue-800 uppercase mb-2 block flex items-center gap-2"><Maximize className="h-4 w-4" /> Cantidad de Puestos</label>
