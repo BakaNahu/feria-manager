@@ -111,20 +111,35 @@ export default function FeriaApp() {
     let dataToSet = [];
 
     if (savedData) {
-      dataToSet = JSON.parse(savedData);
+      try {
+        dataToSet = JSON.parse(savedData);
+        // Validación extra por si los datos están corruptos
+        if (!Array.isArray(dataToSet)) throw new Error("Datos corruptos");
+      } catch (e) {
+        console.error("Error cargando datos, regenerando...", e);
+        dataToSet = generateStructure(); // Fallback seguro
+      }
     } else {
       const cleanStalls = generateStructure();
       const masterFixed = localStorage.getItem('feria_master_fixed');
 
       if (masterFixed) {
-        const fixedIds = JSON.parse(masterFixed);
-        dataToSet = cleanStalls.map(s => {
-          const fixedData = fixedIds.find(f => f.id === s.id);
-          if (fixedData) {
-            return { ...s, ...fixedData, hasPaid: false, attended: false, status: 'occupied', id: s.id, number: s.number }; 
+        try {
+          const fixedIds = JSON.parse(masterFixed);
+          if (Array.isArray(fixedIds)) {
+            dataToSet = cleanStalls.map(s => {
+              const fixedData = fixedIds.find(f => f.id === s.id);
+              if (fixedData) {
+                return { ...s, ...fixedData, hasPaid: false, attended: false, status: 'occupied', id: s.id, number: s.number }; 
+              }
+              return s;
+            });
+          } else {
+            dataToSet = cleanStalls;
           }
-          return s;
-        });
+        } catch (e) {
+          dataToSet = cleanStalls;
+        }
       } else {
         dataToSet = cleanStalls;
       }
@@ -187,8 +202,12 @@ export default function FeriaApp() {
 
       futureDates.forEach(date => {
         const key = `feria_data_${date}`;
-        let dayData = JSON.parse(localStorage.getItem(key));
-        if (!dayData) dayData = generateStructure(); 
+        let dayData;
+        try {
+          dayData = JSON.parse(localStorage.getItem(key));
+        } catch(e) { dayData = null; }
+        
+        if (!dayData || !Array.isArray(dayData)) dayData = generateStructure(); 
 
         const futureUpdates = { ...updates, hasPaid: false, attended: false };
         const targetStallFuture = dayData.find(s => s.id === selectedStall.id);
@@ -237,6 +256,46 @@ export default function FeriaApp() {
     });
     setStalls(updatedStalls);
     setSelectedStall(null);
+  };
+
+  const getFutureReservations = () => {
+    try {
+      const allKeys = Object.keys(localStorage).filter(k => k.startsWith('feria_data_'));
+      let futureBookings = [];
+      
+      allKeys.forEach(key => {
+        const dateStr = key.replace('feria_data_', '');
+        // Validación básica de fecha
+        if (!dateStr || dateStr.length !== 10) return;
+
+        if (dateStr > selectedDate) { 
+          const item = localStorage.getItem(key);
+          if (!item) return;
+          
+          let data;
+          try {
+            data = JSON.parse(item);
+          } catch (e) {
+            return; // Saltar datos corruptos
+          }
+
+          if (Array.isArray(data)) {
+            const occupied = data.filter(s => s.status === 'occupied');
+            const seenGroups = new Set();
+            occupied.forEach(s => {
+              if (!s.groupId || !seenGroups.has(s.groupId)) {
+                 if(s.groupId) seenGroups.add(s.groupId);
+                 futureBookings.push({ date: dateStr, ...s });
+              }
+            });
+          }
+        }
+      });
+      return futureBookings.sort((a,b) => a.date.localeCompare(b.date));
+    } catch (error) {
+      console.error("Error obteniendo reservas futuras:", error);
+      return [];
+    }
   };
 
   // --- FUNCIONES IA ---
@@ -313,12 +372,12 @@ export default function FeriaApp() {
         </div>
       </div>
 
-      {/* Sector Rosas - Aumentamos padding vertical para que la animación no se corte */}
+      {/* Sector Rosas */}
       <div className="bg-gradient-to-b from-pink-50 to-white p-8 rounded-3xl shadow-lg border border-pink-100 max-w-4xl mx-auto transition-all duration-500 hover:shadow-pink-100">
         <h3 className="text-center font-bold text-pink-500 mb-6 uppercase tracking-widest text-sm flex items-center justify-center gap-2">
           <Sparkles className="h-4 w-4" /> Sector Rosas <Sparkles className="h-4 w-4" />
         </h3>
-        <div className="flex justify-center gap-4 overflow-x-auto py-6 px-4"> {/* Padding Extra para Hover */}
+        <div className="flex justify-center gap-4 overflow-x-auto py-6 px-4">
           {stalls.filter(s => s.rowName === 'Sector Rosas').map(s => (
              <div key={s.id} className="w-16 flex-shrink-0">
                <Seat stall={s} onClick={() => { setSelectedStall(s); setOccupyCount(s.groupSize); }} />
@@ -370,6 +429,8 @@ export default function FeriaApp() {
     );
   };
 
+  const bookings = getFutureReservations();
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-700 font-sans pb-20 selection:bg-indigo-100 selection:text-indigo-900">
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 shadow-sm">
@@ -389,7 +450,7 @@ export default function FeriaApp() {
             </div>
             <div className="flex gap-3">
               <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="bg-white border border-slate-200 text-slate-700 text-sm font-bold rounded-lg p-2.5 shadow-sm outline-none cursor-pointer hover:bg-slate-50 transition" />
-              <button onClick={() => { if(confirm("¿Resetear Base de Datos?")) {localStorage.clear(); window.location.reload();} }} className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100"><RefreshCw className="h-5 w-5" /></button>
+              <button onClick={() => { if(confirm("¿ATENCIÓN: Esto borrará TODOS los datos para siempre. ¿Continuar?")) {localStorage.clear(); window.location.reload();} }} className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100"><RefreshCw className="h-5 w-5" /></button>
             </div>
           </div>
         </div>
@@ -433,9 +494,15 @@ export default function FeriaApp() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left text-gray-600">
                   <thead className="text-xs text-slate-500 uppercase bg-slate-50/50 border-b"><tr><th className="px-6 py-4 font-bold">Fecha</th><th className="px-6 py-4 font-bold">Puesto</th><th className="px-6 py-4 font-bold">Nombre</th><th className="px-6 py-4 font-bold">Tipo</th></tr></thead>
-                  <tbody>{getFutureReservations().map((b, i) => (
-                      <tr key={i} className="border-b last:border-0 hover:bg-slate-50 transition-colors duration-150 group"><td className="px-6 py-4 font-bold text-indigo-600 group-hover:text-indigo-700">{b.date}</td><td className="px-6 py-4 font-bold text-slate-800">{b.number}</td><td className="px-6 py-4 font-medium">{b.vendorName}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-bold ${b.isFixed ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{b.isFixed ? 'FIJO' : 'EVENTUAL'}</span></td></tr>
-                  ))}</tbody>
+                  <tbody>
+                    {bookings.length === 0 ? (
+                      <tr><td colSpan="4" className="p-8 text-center text-slate-400 italic">No hay reservas registradas para fechas futuras.</td></tr>
+                    ) : (
+                      bookings.map((b, i) => (
+                        <tr key={i} className="border-b last:border-0 hover:bg-slate-50 transition-colors duration-150 group"><td className="px-6 py-4 font-bold text-indigo-600 group-hover:text-indigo-700">{b.date}</td><td className="px-6 py-4 font-bold text-slate-800">{b.number}</td><td className="px-6 py-4 font-medium">{b.vendorName}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-bold ${b.isFixed ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{b.isFixed ? 'FIJO' : 'EVENTUAL'}</span></td></tr>
+                      ))
+                    )}
+                  </tbody>
                 </table>
               </div>
             </div>
@@ -443,7 +510,7 @@ export default function FeriaApp() {
         </div>
       </main>
 
-      {/* MODAL REDISEÑADO SIN SCROLL */}
+      {/* MODAL REDISEÑADO */}
       {selectedStall && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-300">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl overflow-hidden transform transition-all h-auto">
@@ -534,7 +601,6 @@ export default function FeriaApp() {
   );
 }
 
-// Subcomponente Seat
 function Seat({ stall, onClick, isConnectedRight, isConnectedLeft }) {
   const isOccupied = stall.status === 'occupied';
   const hasIssue = isOccupied && (!stall.hasPaid || !stall.attended);
