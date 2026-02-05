@@ -419,10 +419,18 @@ export default function FeriaApp() {
                    </div>
                 </div>
               </div>
+            {/* Sector Rosas - CORREGIDO: justify-start en móvil para arreglar scroll */}
               <div className="bg-gradient-to-b from-pink-50 to-white p-8 rounded-3xl shadow-lg border border-pink-100 max-w-4xl mx-auto">
-                <h3 className="text-center font-bold text-pink-500 mb-6 uppercase tracking-widest text-sm flex items-center justify-center gap-2"><Sparkles className="h-4 w-4" /> Sector Rosas <Sparkles className="h-4 w-4" /></h3>
-                <div className="flex justify-center gap-4 overflow-x-auto py-6 px-4 touch-pan-x">
-                  {stalls.filter(s => s.rowName === 'Sector Rosas').map(s => <div key={s.id} className="w-16 flex-shrink-0"><Seat stall={s} onClick={() => { setSelectedStall(s); setOccupyCount(s.groupSize); }} /></div>)}
+                <h3 className="text-center font-bold text-pink-500 mb-6 uppercase tracking-widest text-sm flex items-center justify-center gap-2">
+                  <Sparkles className="h-4 w-4" /> Sector Rosas <Sparkles className="h-4 w-4" />
+                </h3>
+                {/* CAMBIO AQUÍ: 'justify-start' para móvil, 'md:justify-center' para PC */}
+                <div className="flex justify-start md:justify-center gap-4 overflow-x-auto py-6 px-4 touch-pan-x">
+                  {stalls.filter(s => s.rowName === 'Sector Rosas').map(s => (
+                    <div key={s.id} className="w-16 flex-shrink-0">
+                      <Seat stall={s} onClick={() => { setSelectedStall(s); setOccupyCount(s.groupSize); }} />
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
